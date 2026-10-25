@@ -55,10 +55,14 @@ $STALE_SECS = [int](Opt 'STALE_SECS' 1800)
 $BAR_HOT = [int](Opt 'BAR_HOT' 80)
 $BAR_WARN = [int](Opt 'BAR_WARN' 50)
 $BAR_GAUGE = Opt 'BAR_GAUGE' '0'
-$BAR_GAUGE_W = [int](Opt 'BAR_GAUGE_W' 5)
+$BAR_GAUGE_W = [int](Opt 'BAR_GAUGE_W' 8)
 $BAR_POSITION = Opt 'BAR_POSITION' 'top-right'
 $TEXT_DIR = Opt 'TEXT_DIR' 'ltr'
 $Rtl = $TEXT_DIR -eq 'rtl'
+function Ids([string]$s) { ($s.ToLower() -replace ',', ' ') -replace '\.\S*', '' } # "Llmapi.ai, Claude" -> "llmapi claude"
+$BAR_PROVIDERS = Ids (Opt 'BAR_PROVIDERS' '') # provider ids shown in the tab bar; empty = all (the dashboard shows all)
+$DISABLED_PROVIDERS = Ids (Opt 'DISABLED_PROVIDERS' '')
+function In-Bar([string]$p) { -not $BAR_PROVIDERS -or ((" $BAR_PROVIDERS ") -like "* $p *") }
 
 # ---------- shared helpers ----------
 function Now { [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
@@ -102,7 +106,7 @@ function Cap([string]$s) { if ($s) { $s.Substring(0, 1).ToUpper() + $s.Substring
 $AGENT_PROVIDERS = 'codex', 'grok', 'droid', 'antigravity', 'cursor'
 $API_PROVIDERS = @('claude') + $AGENT_PROVIDERS + @('openai', 'openrouter', 'llmapi', 'orcarouter', 'deepseek', 'moonshot', 'portkey', 'litellm', 'cloudflare', 'bedrock')
 
-function Provider-Enabled([string]$p) { -not ((" " + (Opt 'DISABLED_PROVIDERS') + " ") -like "* $p *") }
+function Provider-Enabled([string]$p) { -not ((" $DISABLED_PROVIDERS ") -like "* $p *") }
 
 function Key-Vars([string]$p) {
   switch ($p) {
@@ -298,6 +302,9 @@ function Windows-Of([string]$file) {
 }
 
 function Provider-Rows([string]$p, $j) {
+  # LLMAPI_CREDITS / OPENROUTER_CREDITS: the user's usual balance, so a balance gets a gauge
+  $full = 0.0
+  if ($p -in 'llmapi', 'openrouter') { [void][double]::TryParse((Opt "$($p.ToUpper())_CREDITS"), [Globalization.NumberStyles]::Float, $Inv, [ref]$full) }
   if ($j -isnot [array] -and $j.error) { return (Row "${p}:error" '-' 0 "$($j.error) · key has no usage access") }
   switch ($p) {
     'openrouter' {
@@ -305,7 +312,7 @@ function Provider-Rows([string]$p, $j) {
       if ($b -and [double]$b.limit_usd -gt 0) {
         $iv = if ($b.reset_interval) { $b.reset_interval } else { 'budget' }
         Row "openrouter:$iv" ([math]::Min(100, (RoundAway ([double]$b.spend_usd * 100 / [double]$b.limit_usd)))) (ToEpoch $b.resets_at) ((Usd $b.spend_usd) + '/' + (Usd $b.limit_usd))
-      } else { Row 'openrouter:spend' '-' 0 ((Usd $d.usage) + ' used') }
+      } else { Row 'openrouter:spend' $(if ($full -gt 0) { Pctr ([double]$d.usage * 100 / $full) } else { '-' }) 0 ((Usd $d.usage) + ' used') }
       $f = $d.free_model_daily_requests
       if ($f -and [double]$f.limit -gt 0) { # shortcut: assumes UTC-midnight reset, fix if OpenRouter says otherwise
         Row 'openrouter:free/day' ([math]::Min(100, (RoundAway ([double]$f.used * 100 / [double]$f.limit)))) (([math]::Floor((Now) / 86400) + 1) * 86400) "$($f.used)/$($f.limit) req"
@@ -357,7 +364,7 @@ function Provider-Rows([string]$p, $j) {
         if ($null -ne $pu.apiPercentUsed) { Row 'cursor:api' (Pctr $pu.apiPercentUsed) 0 }
       }
     }
-    'llmapi' { Row 'llmapi:credits' '-' 0 ((Usd $j.total_credits) + ' left') }
+    'llmapi' { Row 'llmapi:credits' $(if ($full -gt 0) { Pctr (($full - [double]$j.total_credits) * 100 / $full) } else { '-' }) 0 ((Usd $j.total_credits) + ' left') }
     'orcarouter' { $v = if ($null -ne $j.data.spendable_usd) { $j.data.spendable_usd } else { $j.data.wallet_usd }; Row 'orcarouter:wallet' '-' 0 ((Usd $v) + ' left') }
     'deepseek' { foreach ($bi in @($j.balance_infos)) { if ($bi) { Row 'deepseek:balance' '-' 0 "$($bi.total_balance) $($bi.currency) left" } } }
     'moonshot' { Row 'moonshot:balance' '-' 0 ((Usd $j.data.available_balance) + ' left') }
@@ -446,10 +453,11 @@ function Gauge([int]$pct) { # ██░░░, filled from the right in rtl
   if ($Rtl) { ('░' * ($BAR_GAUGE_W - $f)) + ('█' * $f) } else { ('█' * $f) + ('░' * ($BAR_GAUGE_W - $f)) }
 }
 
-function Fmt-Pct([int]$pct, [string]$unit = '') { # "13%m", "⚠️" above BAR_HOT, gauge when BAR_GAUGE=1
-  $v = "$pct%$unit"
+function Fmt-Pct([int]$pct, [string]$unit = '', [string]$text = '', [switch]$Balance) { # pct used -> "13%m" (or text), "⚠️" above BAR_HOT, gauge when BAR_GAUGE=1
+  $v = if ($text) { $text } else { "$pct%$unit" }
   if ($pct -gt $BAR_HOT) { $v += '⚠️' }
-  if ($BAR_GAUGE -eq '1') { if ($Rtl) { $v = "$v $(Gauge $pct)" } else { $v = "$(Gauge $pct) $v" } }
+  $fill = if ($Balance) { 100 - $pct } else { $pct } # a credit balance drains: its gauge shows what's left
+  if ($BAR_GAUGE -eq '1') { if ($Rtl) { $v = "$v $(Gauge $fill)" } else { $v = "$(Gauge $fill) $v" } }
   $v
 }
 
@@ -543,7 +551,7 @@ function Bar-Name([string]$p) { switch ($p) { 'openrouter' { 'OR' } 'llmapi' { '
 
 function Bar {
   Spawn-Refresh
-  $ranked = @(Profiles-Ranked)
+  $ranked = @(if (In-Bar 'claude') { Profiles-Ranked })
   $primary = if ($ranked.Count) { $ranked[0].f } else { $null }
   $items = New-Object Collections.Generic.List[object]
   if ($primary) {
@@ -557,9 +565,19 @@ function Bar {
   }
   foreach ($r in @(Api-Rows)) {
     $i = $r.k.IndexOf(':'); $p = $r.k.Substring(0, $i); $sub = $r.k.Substring($i + 1)
-    if ($sub -eq 'error') { continue }
-    $v = if ("$($r.u)" -eq '-') { $r.r } else { Fmt-Pct $r.u (Unit-For $sub) }
+    if ($sub -eq 'error' -or -not (In-Bar $p)) { continue }
+    $v = if ("$($r.u)" -eq '-') { $r.r }
+    elseif ($sub -in 'credits', 'spend') { Fmt-Pct $r.u '' $r.r -Balance } # a balance with LLMAPI_/OPENROUTER_CREDITS: gauge + "$X left"
+    else { Fmt-Pct $r.u (Unit-For $sub) }
     $items.Add(@($p, $v))
+  }
+
+  if ($BAR_PROVIDERS) { # providers in the order the user listed them
+    $ordered = New-Object Collections.Generic.List[object]
+    foreach ($b in @($BAR_PROVIDERS -split '\s+' | Where-Object { $_ } | Select-Object -Unique)) {
+      foreach ($it in $items) { if ($it[0] -eq $b) { $ordered.Add($it) } }
+    }
+    $items = $ordered
   }
 
   # one "Name: v v" part per provider; rtl reads "v v :Name" and runs right to left
@@ -602,15 +620,17 @@ function Draw-One([string]$key, $used, [long]$epoch, [string]$right = '') {
   if ("$used" -eq '-') { return }
   $used = [int]$used
   $color = if ($used -ge $BAR_HOT) { "$ESC[38;5;210m" } elseif ($used -ge $BAR_WARN) { "$ESC[38;5;222m" } else { "$ESC[38;5;147m" }
-  $filled = [math]::Min($BAR_W, [math]::Floor($used * $BAR_W / 100))
-  if ($used -gt 0 -and $filled -eq 0) { $filled = 1 }
-  $tick = [math]::Min($BAR_W - 1, [math]::Floor($BAR_W * $BAR_HOT / 100))
+  $fill = $used; $hot = $BAR_HOT
+  if ($key -like '*:credits' -or $key -like '*:spend') { $fill = 100 - $used; $hot = 100 - $BAR_HOT } # credit balances drain: show what's left
+  $filled = [math]::Min($BAR_W, [math]::Floor($fill * $BAR_W / 100))
+  if ($fill -gt 0 -and $filled -eq 0) { $filled = 1 }
+  $tick = [math]::Min($BAR_W - 1, [math]::Floor($BAR_W * $hot / 100))
   $cells = ''
   for ($i = 0; $i -lt $BAR_W; $i++) {
     $cell = if ($i -lt $filled) { '█' } elseif ($i -eq $tick) { "$ESC[38;5;243m┊$color" } else { "$ESC[38;5;238m░$color" }
     if ($Rtl) { $cells = "$cell$cells" } else { $cells += $cell } # rtl fills from the right
   }
-  if ($Rtl) { Emit ("  {0,3}% $color$cells$rst`n" -f $used) } else { Emit ("  $color$cells$rst {0,3}%`n" -f $used) }
+  if ($Rtl) { Emit ("  {0,3}% $color$cells$rst`n" -f $fill) } else { Emit ("  $color$cells$rst {0,3}%`n" -f $fill) }
 }
 
 function Draw([int]$tabIndex = 0) {
@@ -748,7 +768,7 @@ function Herdr-Config {
   $outl.Add("key = `"prefix+u`" # $PLUGIN")
   $outl.Add("type = `"popup`" # $PLUGIN")
   $outl.Add("command = '$(Ps-Command 'dashboard')' # $PLUGIN")
-  $outl.Add("description = `"LLM API usage dashboard`" # $PLUGIN")
+  $outl.Add("description = `"Dashboard to monitor your agents quota and credits`" # $PLUGIN")
   $outl.Add("width = 104 # $PLUGIN")
   $outl.Add("height = 26 # $PLUGIN")
   Write-Lines $cfg $outl

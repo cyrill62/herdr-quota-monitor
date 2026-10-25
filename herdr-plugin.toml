@@ -1,6 +1,6 @@
 id = "herdr-quota-monitor"
 name = "Quota Monitor"
-version = "0.1.0"
+version = "0.1.1"
 min_herdr_version = "0.8.0"
 description = "Global usage for coding agents (Claude Code, Codex, Grok CLI, Factory Droid, Antigravity, Cursor) and LLM APIs (OpenAI, Anthropic, OpenRouter, llmapi.ai, OrcaRouter, DeepSeek, Moonshot) in one place: a compact tab-bar entry and a tabbed popup dashboard. Data from Claude Code's statusLine hook + provider API calls. No API keys stored in config - read from env (keychain fallback)."
 platforms = ["macos", "linux", "windows"]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# herdr-quota-monitor: coding-agent and LLM API quotas inside Herdr (formerly herdr-llmapi-usage).
+# herdr-quota-monitor: coding-agent and LLM API quotas inside Herdr.
 # Windows: bin/herdr-quota-monitor.ps1 is a PowerShell port; change both together.
 #
 # Data sources:
@@ -8,22 +8,15 @@
 set -u
 
 PLUGIN="herdr-quota-monitor"
-OLD_PLUGIN="herdr-llmapi-usage" # previous name: its data and keychain entries are reused
 TITLE="~ AI usage Monitor ~" # dashboard heading
 HERDR=${HERDR_BIN_PATH:-herdr}
 STATE_DIR=${HERDR_PLUGIN_STATE_DIR:-$HOME/.local/state/herdr/plugins/$PLUGIN}
 CONFIG_DIR=${HERDR_PLUGIN_CONFIG_DIR:-$HOME/.config/herdr/plugins/config/$PLUGIN}
-KEYCHAIN_SERVICE="$OLD_PLUGIN" # kept: renaming it would orphan keys already stored
+KEYCHAIN_SERVICE="$PLUGIN"
 PAYLOAD="$STATE_DIR/payload.json"
 CHAIN="$CONFIG_DIR/chain"
 STALE_SECS=${STALE_SECS:-1800}
 
-for d in "$STATE_DIR:$HOME/.local/state/herdr/plugins/$OLD_PLUGIN" "$CONFIG_DIR:$HOME/.config/herdr/plugins/config/$OLD_PLUGIN"; do
-  # one-time move of the old plugin's data (statusLine chain, profiles, caches) into the new dirs
-  if [ -d "${d#*:}" ] && [ -z "$(ls -A "${d%%:*}" 2>/dev/null)" ]; then
-    mkdir -p "${d%%:*}" && cp -a "${d#*:}/." "${d%%:*}/" && rm -rf "${d#*:}"
-  fi
-done
 mkdir -p "$STATE_DIR"
 [ -f "$CONFIG_DIR/config" ] && . "$CONFIG_DIR/config"
 
@@ -65,14 +58,18 @@ collect() {
 
 # ---------- API key management ----------
 # Keys come from env <PROVIDER>_API_KEY (e.g. OPENROUTER_API_KEY), else macOS keychain
-# entry "herdr-llmapi-usage-<provider>" (the old name, see KEYCHAIN_SERVICE). A provider listed in DISABLED_PROVIDERS (plugin
+# entry "herdr-quota-monitor-<provider>". A provider listed in DISABLED_PROVIDERS (plugin
 # config) gets no key, so it is never fetched or shown; "claude" also hides statusLine data.
 # Coding agents need no key: they use the login their own CLI/app saved (or CodexBar).
 AGENT_PROVIDERS="codex grok droid antigravity cursor"
 # Gateways/routers report what went through them: LiteLLM, Portkey, Cloudflare AI Gateway, Bedrock.
 API_PROVIDERS="claude $AGENT_PROVIDERS openai openrouter llmapi orcarouter deepseek moonshot portkey litellm cloudflare bedrock"
 
-provider_enabled() { case " ${DISABLED_PROVIDERS:-} " in *" $1 "*) return 1 ;; esac }
+ids() { # provider list as typed by users ("Llmapi.ai, Claude") -> "llmapi claude"
+  printf '%s' "${1:-}" | tr 'A-Z,' 'a-z ' | sed 's/\.[^ ]*//g'
+}
+DISABLED_PROVIDERS=$(ids "${DISABLED_PROVIDERS:-}")
+provider_enabled() { case " $DISABLED_PROVIDERS " in *" $1 "*) return 1 ;; esac }
 
 key_vars() { # provider -> env var names, first set wins
   case "$1" in
@@ -316,7 +313,7 @@ api_rows_jq() {
         ([$b.spend_usd * 100 / $b.limit_usd, 100] | min | round | tostring),
         ($b.resets_at | epoch | tostring),
         ($b.spend_usd | usd) + "/" + ($b.limit_usd | usd)]
-     else ["openrouter:spend", "-", "0", ((.usage // 0) | usd) + " used"] end),
+     else ["openrouter:spend", (if $full > 0 then (.usage // 0) * 100 / $full | pctr else "-" end), "0", ((.usage // 0) | usd) + " used"] end),
     (.free_model_daily_requests // empty | select((.limit // 0) > 0) |
        ["openrouter:free/day",
         ([.used * 100 / .limit, 100] | min | round | tostring),
@@ -340,7 +337,8 @@ api_rows_jq() {
       | (if $inc != null then ["cursor:included", ($inc | pctr), "0"] else empty end),
         (.autoPercentUsed // empty | ["cursor:auto", pctr, "0"]),
         (.apiPercentUsed // empty | ["cursor:api", pctr, "0"])' ;;
-  llmapi) printf '%s' '["llmapi:credits", "-", "0", (.total_credits // 0 | usd) + " left"]' ;;
+  llmapi) printf '%s' '(.total_credits // 0) as $left
+      | ["llmapi:credits", (if $full > 0 then ($full - $left) * 100 / $full | pctr else "-" end), "0", ($left | usd) + " left"]' ;;
   orcarouter) printf '%s' '.data | ["orcarouter:wallet", "-", "0", (.spendable_usd // .wallet_usd // 0 | usd) + " left"]' ;;
   deepseek) printf '%s' '.balance_infos[]? | ["deepseek:balance", "-", "0", "\(.total_balance) \(.currency) left"]' ;;
   moonshot) printf '%s' '.data | ["moonshot:balance", "-", "0", (.available_balance // 0 | usd) + " left"]' ;;
@@ -360,11 +358,14 @@ api_rows_jq() {
 
 # API usage rows: key<TAB>used%<TAB>resets_epoch<TAB>right-text. used% "-" = no bar (balance only).
 api_extra_windows() {
-  local p c
+  local p c full
   for p in $API_PROVIDERS; do
     c="$API_CACHE_DIR/$p.json"
     [ "$(payload_age "$c")" -lt "$([ "$p" = bedrock ] && echo 43200 || echo 3600)" ] && [ -n "$(get_api_key "$p")" ] || continue
-    jq -r --arg p "$p" --arg cb "${p/droid/factory}" '
+    # LLMAPI_CREDITS / OPENROUTER_CREDITS: the user's usual balance, so a balance gets a gauge
+    full=$(case "$p" in llmapi) printf '%s' "${LLMAPI_CREDITS:-}" ;; openrouter) printf '%s' "${OPENROUTER_CREDITS:-}" ;; esac)
+    jq -r --arg p "$p" --arg cb "${p/droid/factory}" --arg full "$full" '
+      ($full | tonumber? // 0) as $full |
       def usd: "$" + (. * 100 | round / 100 | tostring);
       def epoch: (. // "") | (try (sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601) catch 0);
       def rst: if type == "number" then (if . > 1e11 then . / 1000 | floor else . end) elif type == "string" then epoch else 0 end;
@@ -450,9 +451,12 @@ short_label() {
 BAR_HOT=${BAR_HOT:-80}
 BAR_WARN=${BAR_WARN:-50}
 BAR_GAUGE=${BAR_GAUGE:-0}               # 1: small gauge next to each tab-bar percentage
-BAR_GAUGE_W=${BAR_GAUGE_W:-5}           # gauge cells
+BAR_GAUGE_W=${BAR_GAUGE_W:-8}           # gauge cells
 BAR_POSITION=${BAR_POSITION:-top-right} # top-right | top-center | bottom-right | bottom-center
 TEXT_DIR=${TEXT_DIR:-ltr}               # rtl: mirror the tab bar and dashboard (Arabic, Hebrew, ...)
+BAR_PROVIDERS=$(ids "${BAR_PROVIDERS:-}") # provider ids shown in the tab bar; empty = all (the dashboard shows all)
+
+in_bar() { [ -z "$BAR_PROVIDERS" ] || case " $BAR_PROVIDERS " in *" $1 "*) ;; *) return 1 ;; esac }
 
 unit_for() { # window key or sub-label -> compact suffix, as in 13%m, 50%w, 45%h
   case "$1" in
@@ -482,11 +486,12 @@ gauge() { # pct -> ██░░░, filled from the right in rtl
   printf '%s' "$g"
 }
 
-fmt_pct() { # pct [unit] -> "13%m", "⚠️" above BAR_HOT, gauge when BAR_GAUGE=1
-  local v="$1%${2:-}"
+fmt_pct() { # pct-used [unit] [text] [balance] -> "13%m" (or text), "⚠️" above BAR_HOT, gauge when BAR_GAUGE=1
+  local v="${3:-$1%${2:-}}" fill="$1"
   [ "$1" -gt "$BAR_HOT" ] 2>/dev/null && v+="⚠️"
+  [ -n "${4:-}" ] && fill=$((100 - $1)) # a credit balance drains: its gauge shows what's left
   if [ "$BAR_GAUGE" = 1 ]; then
-    if [ "$TEXT_DIR" = rtl ]; then v="$v $(gauge "$1")"; else v="$(gauge "$1") $v"; fi
+    if [ "$TEXT_DIR" = rtl ]; then v="$v $(gauge "$fill")"; else v="$(gauge "$fill") $v"; fi
   fi
   printf '%s' "$v"
 }
@@ -533,7 +538,7 @@ bar_name() {
 bar() {
   fetch_all_apis
   local ranked primary others
-  ranked=$(provider_enabled claude && profiles_ranked)
+  ranked=$(provider_enabled claude && in_bar claude && profiles_ranked)
   primary=$(printf '%s\n' "$ranked" | head -1 | cut -f1)
   others=$(printf '%s\n' "$ranked" | grep -c . || true)
   local items=() key used epoch right v hr
@@ -547,14 +552,28 @@ bar() {
     items+=("claude"$'\t'"$v")
   done < <([ -n "$primary" ] && windows "$primary")
   while IFS=$'\t' read -r key used epoch right; do
-    [ -n "$key" ] && [ "${key#*:}" != error ] || continue
-    if [ "$used" = "-" ]; then v="$right"; else v=$(fmt_pct "$used" "$(unit_for "${key#*:}")"); fi
+    [ -n "$key" ] && [ "${key#*:}" != error ] && in_bar "${key%%:*}" || continue
+    if [ "$used" = "-" ]; then
+      v="$right"
+    elif [ "${key#*:}" = credits ] || [ "${key#*:}" = spend ]; then
+      v=$(fmt_pct "$used" "" "$right" balance) # a balance with LLMAPI_/OPENROUTER_CREDITS: gauge + "$X left"
+    else v=$(fmt_pct "$used" "$(unit_for "${key#*:}")"); fi
     items+=("${key%%:*}"$'\t'"$v")
   done < <(api_extra_windows)
 
+  if [ -n "$BAR_PROVIDERS" ]; then # providers in the order the user listed them
+    local ordered=() b seen=" "
+    for b in $BAR_PROVIDERS; do
+      case "$seen" in *" $b "*) continue ;; esac
+      seen+="$b "
+      for item in ${items[@]+"${items[@]}"}; do [ "${item%%$'\t'*}" = "$b" ] && ordered+=("$item"); done
+    done
+    items=(${ordered[@]+"${ordered[@]}"})
+  fi
+
   # one "Name: v v" part per provider; rtl reads "v v :Name" and runs right to left
   local parts=() p last="" vals="" item i out
-  for item in "${items[@]}" $'\t'; do
+  for item in ${items[@]+"${items[@]}"} $'\t'; do
     p="${item%%$'\t'*}"
     if [ "$p" != "$last" ] && [ -n "$last" ]; then
       if [ "$TEXT_DIR" = rtl ]; then parts=("$vals :$(bar_name "$last")" "${parts[@]}")
@@ -598,7 +617,7 @@ LINE_W=39
 draw_one() { # key used epoch [right-text]
   local key="$1" used="$2" epoch="$3" right="${4:-}"
   local dim=$'\e[2m' rst=$'\e[0m' bold=$'\e[1m'
-  local label color filled tick i cell cells pad
+  local label color filled tick i cell cells pad fill hot
   label=$(label_for "$key")
   if [ "$epoch" -gt 0 ] 2>/dev/null; then
     if [ -z "$right" ]; then
@@ -618,10 +637,12 @@ draw_one() { # key used epoch [right-text]
   elif [ "$used" -ge "$BAR_WARN" ] 2>/dev/null; then
     color=$'\e[38;5;222m'
   else color=$'\e[38;5;147m'; fi
-  filled=$((used * BAR_W / 100))
+  fill=$used hot=$BAR_HOT
+  case "$key" in *:credits | *:spend) fill=$((100 - used)) hot=$((100 - BAR_HOT)) ;; esac # credit balances drain: show what's left
+  filled=$((fill * BAR_W / 100))
   [ "$filled" -gt "$BAR_W" ] && filled=$BAR_W
-  [ "$used" -gt 0 ] && [ "$filled" -eq 0 ] && filled=1
-  tick=$((BAR_W * BAR_HOT / 100))
+  [ "$fill" -gt 0 ] && [ "$filled" -eq 0 ] && filled=1
+  tick=$((BAR_W * hot / 100))
   [ "$tick" -ge "$BAR_W" ] && tick=$((BAR_W - 1))
   cells=""
   for ((i = 0; i < BAR_W; i++)); do
@@ -633,9 +654,9 @@ draw_one() { # key used epoch [right-text]
     if [ "$TEXT_DIR" = rtl ]; then cells="$cell$cells"; else cells+="$cell"; fi # rtl fills from the right
   done
   if [ "$TEXT_DIR" = rtl ]; then
-    printf '  %3d%% %s%s%s\n' "$used" "$color" "$cells" "$rst"
+    printf '  %3d%% %s%s%s\n' "$fill" "$color" "$cells" "$rst"
   else
-    printf '  %s%s%s %3d%%\n' "$color" "$cells" "$rst" "$used"
+    printf '  %s%s%s %3d%%\n' "$color" "$cells" "$rst" "$fill"
   fi
 }
 
@@ -783,7 +804,7 @@ herdr_config() {
     printf 'key = "prefix+u" # %s\n' "$PLUGIN"
     printf 'type = "popup" # %s\n' "$PLUGIN"
     printf 'command = "bash '\''%s'\'' dashboard" # %s\n' "$me" "$PLUGIN"
-    printf 'description = "LLM API usage dashboard" # %s\n' "$PLUGIN"
+    printf 'description = "Dashboard to monitor your agents quota and credits" # %s\n' "$PLUGIN"
     printf 'width = 104 # %s\n' "$PLUGIN"
     printf 'height = 26 # %s\n' "$PLUGIN"
   } >"$tmp.2" && mv "$tmp.2" "$cfg" && rm -f "$tmp"

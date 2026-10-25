@@ -2,9 +2,8 @@
 
 Global usage for **coding agents** (Claude Code, Codex, Grok CLI, Factory Droid, Antigravity, Cursor) and **multiple LLM APIs** (OpenAI, Anthropic, OpenRouter, llmapi.ai, OrcaRouter, DeepSeek, Moonshot) inside [Herdr](https://herdr.dev), in one place.
 
-```text
-✳  Claude: 62%h ↻ 8pm 32%w · Codex: 13%m · OR: 12%m 40%d · LLMAPI: $145.56 left
-```
+<img width="749" height="32" alt="bar" src="https://github.com/user-attachments/assets/e55078d2-fd86-40ce-8799-0ac0d20c7d48" />
+<img width="939" height="496" alt="dashboard" src="https://github.com/user-attachments/assets/53b7c5b8-1bad-46b1-9f73-d16fcfda28c8" />
 
 ## Features
 
@@ -107,7 +106,7 @@ export OPENROUTER_API_KEY="sk-or-..."
 export LLMAPI_API_KEY="..."
 ```
 
-They can also go in the plugin `config` file (see Configuration). On macOS, `setup-keys` stores them in the keychain under service `herdr-llmapi-usage-<provider>` (the plugin's former name, kept so stored keys still work) instead.
+They can also go in the plugin `config` file (see Configuration). On macOS, `setup-keys` stores them in the keychain under service `herdr-quota-monitor-<provider>` instead.
 
 OpenAI and Anthropic only report usage to an org **admin** key (`sk-admin-...` / `sk-ant-admin...`). With a normal key their tab shows `HTTP 401 · key has no usage access`.
 
@@ -117,26 +116,7 @@ AWS Bedrock is read through Cost Explorer (`aws ce get-cost-and-usage`), which n
 
 The tab bar updates on its own every 30s. `prefix+u` opens the dashboard:
 
-```text
-  ✳ LLM API usage   12s ago · 8 session(s) · Europe/Prague
-
-   All  Claude  OpenRouter  llmapi.ai
-
-  Session (5h)                ↻ 33m · 8pm
-  ████████████████████████░░░┊░░░░░░  71%
-
-  Week · all models     ↻ 1d22h · Thu 6pm
-  ███████████░░░░░░░░░░░░░░░░┊░░░░░  33%
-
-  OpenRouter · monthly   $6/$50 · ↻ 6d17h
-  ████░░░░░░░░░░░░░░░░░░░░░░░┊░░░░░░  12%
-
-  llmapi.ai · credits        $145.56 left
-
-  ◦ 5h 4% · wk 54% · other profile (1 session(s) · rover)
-
-  ←/→ tab · 1-9 jump · q close · any key refresh · auto 30s
-```
+<img width="939" height="496" alt="dashboard" src="https://github.com/user-attachments/assets/53b7c5b8-1bad-46b1-9f73-d16fcfda28c8" />
 
 Bars are lavender below 50%, amber from 50%, red from 80%; the faint `┊` tick marks where red begins.
 
@@ -176,9 +156,12 @@ Optional `config` file in the plugin config dir (`herdr plugin config-dir herdr-
 | `DISABLED_PROVIDERS` | – | Space-separated ids never fetched or shown, even with a key set: `claude codex grok droid antigravity cursor openai openrouter llmapi orcarouter deepseek moonshot portkey litellm cloudflare bedrock`. `claude` also hides the Claude Code statusLine windows |
 | `BAR_HOT` | `80` | Above this %, the tab bar adds `⚠️` and dashboard bars turn red |
 | `BAR_WARN` | `50` | From this %, dashboard bars turn amber |
-| `BAR_GAUGE` | `0` | `1` shows a progress bar next to each tab-bar percentage (`Claude: █░░░░ 7%h ████░ 76%w`) |
-| `BAR_GAUGE_W` | `5` | Progress bar width, in cells |
+| `BAR_GAUGE` | `0` | `1` shows a progress bar next to each tab-bar percentage (`Claude: █░░░░░░░ 7%h ██████░░ 76%w`) |
+| `BAR_GAUGE_W` | `8` | Progress bar width, in cells |
 | `BAR_POSITION` | `top-right` | `top-right`, `top-center`, `bottom-right` or `bottom-center`. Top/bottom sets herdr's `tab_bar_position` (the whole tab row) when you run `configure`; center pads the entry with spaces to the middle of the row. Left and right-side (vertical) positions aren't possible: herdr only has a right-aligned, one-line slot in the tab row |
+| `LLMAPI_CREDITS` | – | Your usual llmapi.ai balance in $ (e.g. `200`): the balance then gets a gauge of what's left, draining as you spend (`LLMAPI: ███████░ $145.56 left`), with `⚠️` once less than 100 − `BAR_HOT`% is left |
+| `OPENROUTER_CREDITS` | – | Same for an OpenRouter key without a budget: its "$X used" gets a draining gauge of what's left of this amount (keys with a budget already have one) |
+| `BAR_PROVIDERS` | all | Provider ids shown in the tab bar, e.g. `"claude codex openrouter"` (commas and any capitalization work too), shown in the order you list them. The dashboard still shows every enabled provider (use `DISABLED_PROVIDERS` to hide one everywhere) |
 | `TEXT_DIR` | `ltr` | `rtl` mirrors the tab bar and dashboard for right-to-left readers |
 | `STALE_SECS` | `1800` | How long (seconds) a Claude profile counts as fresh |
 
