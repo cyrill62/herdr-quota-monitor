@@ -1,0 +1,66 @@
+id = "herdr-quota-monitor"
+name = "Quota Monitor"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "Global usage for coding agents (Claude Code, Codex, Grok CLI, Factory Droid, Antigravity, Cursor) and LLM APIs (OpenAI, Anthropic, OpenRouter, llmapi.ai, OrcaRouter, DeepSeek, Moonshot) in one place: a compact tab-bar entry and a tabbed popup dashboard. Data from Claude Code's statusLine hook + provider API calls. No API keys stored in config - read from env (keychain fallback)."
+platforms = ["macos", "linux", "windows"]
+
+# macOS / Linux: bin/herdr-quota-monitor.sh (bash)
+
+[[actions]]
+id = "configure"
+title = "Quota Monitor: set up statusLine, tab bar, and keybinding"
+contexts = ["workspace"]
+platforms = ["macos", "linux"]
+command = ["bash", "bin/herdr-quota-monitor.sh", "configure"]
+
+[[actions]]
+id = "uninstall"
+title = "Quota Monitor: remove statusLine and config entries"
+contexts = ["workspace"]
+platforms = ["macos", "linux"]
+command = ["bash", "bin/herdr-quota-monitor.sh", "uninstall"]
+
+[[actions]]
+id = "setup-keys"
+title = "Quota Monitor: store API keys in keychain (macOS) or env"
+contexts = ["workspace"]
+platforms = ["macos", "linux"]
+command = ["bash", "bin/herdr-quota-monitor.sh", "setup-keys"]
+
+[[panes]]
+id = "dashboard"
+title = "Quota Monitor"
+placement = "overlay"
+platforms = ["macos", "linux"]
+command = ["bash", "bin/herdr-quota-monitor.sh", "dashboard"]
+
+# Windows: bin/herdr-quota-monitor.ps1 (PowerShell 5.1+; ids must be unique, hence the -windows suffix)
+
+[[actions]]
+id = "configure-windows"
+title = "Quota Monitor: set up statusLine, tab bar, and keybinding"
+contexts = ["workspace"]
+platforms = ["windows"]
+command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "bin/herdr-quota-monitor.ps1", "configure"]
+
+[[actions]]
+id = "uninstall-windows"
+title = "Quota Monitor: remove statusLine and config entries"
+contexts = ["workspace"]
+platforms = ["windows"]
+command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "bin/herdr-quota-monitor.ps1", "uninstall"]
+
+[[actions]]
+id = "setup-keys-windows"
+title = "Quota Monitor: store API keys as user environment variables"
+contexts = ["workspace"]
+platforms = ["windows"]
+command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "bin/herdr-quota-monitor.ps1", "setup-keys"]
+
+[[panes]]
+id = "dashboard-windows"
+title = "Quota Monitor"
+placement = "overlay"
+platforms = ["windows"]
+command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "bin/herdr-quota-monitor.ps1", "dashboard"]
